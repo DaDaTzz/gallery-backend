@@ -1,8 +1,8 @@
 package com.da.gallery.service.impl;
 
+import cn.hutool.core.bean.BeanUtil;
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.ObjUtil;
-import cn.hutool.core.util.StrUtil;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
@@ -18,6 +18,7 @@ import com.da.gallery.model.dto.picture.PictureUploadRequest;
 import com.da.gallery.model.entity.Picture;
 import com.da.gallery.model.entity.User;
 import com.da.gallery.model.enums.PictureReviewStatusEnum;
+import com.da.gallery.model.enums.UserRoleEnum;
 import com.da.gallery.model.vo.PictureVO;
 import com.da.gallery.model.vo.UserVO;
 import com.da.gallery.service.PictureService;
@@ -47,6 +48,13 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
     @Resource
     private UserService userService;
 
+    /**
+     * 上传图片
+     * @param multipartFile
+     * @param pictureUploadRequest
+     * @param loginUser
+     * @return
+     */
     @Override
     public PictureVO uploadPicture(MultipartFile multipartFile, PictureUploadRequest pictureUploadRequest, User loginUser) {
         ThrowUtils.throwIf(loginUser == null, ErrorCode.NO_AUTH_ERROR);
@@ -57,10 +65,12 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
         }
         // 如果是更新图片，需要校验图片是否存在
         if (pictureId != null) {
-            boolean exists = this.lambdaQuery()
-                    .eq(Picture::getId, pictureId)
-                    .exists();
-            ThrowUtils.throwIf(!exists, ErrorCode.NOT_FOUND_ERROR, "图片不存在");
+            Picture oldPicture = this.getById(pictureId);
+            ThrowUtils.throwIf(oldPicture == null, ErrorCode.NOT_FOUND_ERROR, "图片不存在");
+            // 仅本人或管理员可编辑图片
+            if(!oldPicture.getUserId().equals(loginUser.getId()) || userService.isAdmin(loginUser)){
+                throw new BusinessException(ErrorCode.NO_AUTH_ERROR, "仅本人或管理员可编辑图片");
+            }
         }
         // 上传图片，得到信息
         // 按照用户 id 划分目录
@@ -68,14 +78,10 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
         UploadPictureResult uploadPictureResult = fileManager.uploadPicture(multipartFile, uploadPathPrefix);
         // 构造要入库的图片信息
         Picture picture = new Picture();
-        picture.setUrl(uploadPictureResult.getUrl());
-        picture.setName(uploadPictureResult.getName());
-        picture.setPicSize(uploadPictureResult.getPicSize());
-        picture.setPicWidth(uploadPictureResult.getPicWidth());
-        picture.setPicHeight(uploadPictureResult.getPicHeight());
-        picture.setPicScale(uploadPictureResult.getPicScale());
-        picture.setPicFormat(uploadPictureResult.getPicFormat());
+        BeanUtil.copyProperties(uploadPictureResult, picture);
         picture.setUserId(loginUser.getId());
+        // 补充审核参数
+        this.fillReviewParams(picture, loginUser);
         // 如果 pictureId 不为空，表示更新，否则是新增
         if (pictureId != null) {
             // 如果是更新，需要补充 id 和编辑时间
@@ -85,6 +91,26 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
         boolean result = this.saveOrUpdate(picture);
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR, "图片上传失败");
         return PictureVO.objToVo(picture);
+    }
+
+    /**
+     * 填充审核参数（用户编辑图片/更新图片，需要重新进行审核）
+     * @param picture
+     * @param user
+     */
+    @Override
+    public void fillReviewParams(Picture picture, User user){
+        if(userService.isAdmin(user)){
+            // 管理员自动过审
+            picture.setReviewStatus(PictureReviewStatusEnum.PASS.getValue());
+            picture.setReviewMessage("管理员自动过审");
+            picture.setReviewerId(user.getId());
+            picture.setReviewTime(new Date());
+        }else {
+            // 普通用户上传或编辑图片，默认都是待审核
+            picture.setReviewStatus(PictureReviewStatusEnum.REVIEWING.getValue());
+        }
+
     }
 
 
@@ -132,18 +158,24 @@ public class PictureServiceImpl extends ServiceImpl<PictureMapper, Picture>
         String searchText = pictureQueryRequest.getSearchText();
         String sortField = pictureQueryRequest.getSortField();
         String sortOrder = pictureQueryRequest.getSortOrder();
+        Integer reviewStatus = pictureQueryRequest.getReviewStatus();
+        Long reviewerId = pictureQueryRequest.getReviewerId();
+        String reviewMessage = pictureQueryRequest.getReviewMessage();
 
         // 拼接查询条件
         if (StringUtils.isNotBlank(searchText)) {
             queryWrapper.and(qw -> qw.like("name", searchText).or().like("introduction", introduction));
         }
         queryWrapper.like(StringUtils.isNotBlank(name), "name", name);
+        queryWrapper.like(StringUtils.isNotBlank(reviewMessage), "reviewMessage", reviewMessage);
         queryWrapper.like(StringUtils.isNotBlank(introduction), "introduction", introduction);
         if (CollUtil.isNotEmpty(tagList)) {
             for (String tag : tagList) {
                 queryWrapper.like("tags", "\"" + tag + "\"");
             }
         }
+        queryWrapper.eq(ObjectUtils.isNotEmpty(reviewStatus), "reviewStatus", reviewStatus);
+        queryWrapper.eq(ObjectUtils.isNotEmpty(reviewerId), "reviewerId", reviewerId);
         queryWrapper.eq(ObjectUtils.isNotEmpty(category), "category", category);
         queryWrapper.eq(ObjectUtils.isNotEmpty(id), "id", id);
         queryWrapper.eq(ObjectUtils.isNotEmpty(picSize), "picSize", picSize);

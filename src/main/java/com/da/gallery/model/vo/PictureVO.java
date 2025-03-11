@@ -99,6 +99,11 @@ public class PictureVO implements Serializable {
      */
     private UserVO userVO;
 
+    /**
+     * 审核状态
+     */
+    private Integer reviewStatus;
+
 
 
     /**

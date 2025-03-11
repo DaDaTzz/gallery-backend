@@ -14,6 +14,7 @@ import com.da.gallery.exception.ThrowUtils;
 import com.da.gallery.model.dto.picture.*;
 import com.da.gallery.model.entity.Picture;
 import com.da.gallery.model.entity.User;
+import com.da.gallery.model.enums.PictureReviewStatusEnum;
 import com.da.gallery.model.vo.PictureTagCategory;
 import com.da.gallery.model.vo.PictureVO;
 import com.da.gallery.service.PictureService;
@@ -41,7 +42,6 @@ public class PictureController {
      * 上传图片（可重新上传）
      */
     @PostMapping("/upload")
-    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
     public BaseResponse<PictureVO> uploadPicture(
             @RequestPart("file") MultipartFile multipartFile,
             PictureUploadRequest pictureUploadRequest,
@@ -85,22 +85,26 @@ public class PictureController {
      */
     @PostMapping("/update")
     @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
-    public BaseResponse<Boolean> updatePicture(@RequestBody PictureUpdateRequest pictureUpdateRequest) {
+    public BaseResponse<Boolean> updatePicture(@RequestBody PictureUpdateRequest pictureUpdateRequest, HttpServletRequest request) {
         if (pictureUpdateRequest == null || pictureUpdateRequest.getId() <= 0) {
             throw new BusinessException(ErrorCode.PARAMS_ERROR);
         }
         Picture picture = new Picture();
         BeanUtils.copyProperties(pictureUpdateRequest, picture);
+        User loginUser = userService.getLoginUser(request);
         List<String> tags = pictureUpdateRequest.getTagList();
         if (tags != null) {
             picture.setTags(JSONUtil.toJsonStr(tags));
         }
         // 参数校验
         pictureService.validPicture(picture, false);
+        // 补充审核参数
+        pictureService.fillReviewParams(picture, loginUser);
         long id = pictureUpdateRequest.getId();
         // 判断是否存在
         Picture oldPicture = pictureService.getById(id);
         ThrowUtils.throwIf(oldPicture == null, ErrorCode.NOT_FOUND_ERROR);
+
         boolean result = pictureService.updateById(picture);
         return ResultUtils.success(result);
     }
@@ -119,6 +123,10 @@ public class PictureController {
         Picture picture = pictureService.getById(id);
         if (picture == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND_ERROR);
+        }
+        // 普通用户未过审的图片不允许查看
+        if(!userService.isAdmin(request) && !picture.getReviewStatus().equals(PictureReviewStatusEnum.PASS.getValue())){
+            throw new BusinessException(ErrorCode.NO_AUTH_ERROR,"图片未过审");
         }
         return ResultUtils.success(pictureService.getPictureVO(picture, request));
     }
@@ -153,6 +161,8 @@ public class PictureController {
         long size = pictureQueryRequest.getPageSize();
         // 限制爬虫
         ThrowUtils.throwIf(size > 20, ErrorCode.PARAMS_ERROR);
+        // 普通用户只能看到审核通过的数据
+        pictureQueryRequest.setReviewStatus(PictureReviewStatusEnum.PASS.getValue());
         Page<Picture> picturePage = pictureService.page(new Page<>(current, size),
                 pictureService.getQueryWrapper(pictureQueryRequest));
         return ResultUtils.success(pictureService.getPictureVOPage(picturePage, request));
@@ -198,15 +208,17 @@ public class PictureController {
         }
         Picture picture = new Picture();
         BeanUtils.copyProperties(pictureEditRequest, picture);
+        User loginUser = userService.getLoginUser(request);
         List<String> tags = pictureEditRequest.getTagList();
         if (tags != null) {
             picture.setTags(JSONUtil.toJsonStr(tags));
         }
-        // 更新编辑时间
-        picture.setEditTime(new Date());
         // 参数校验
         pictureService.validPicture(picture, false);
-        User loginUser = userService.getLoginUser(request);
+        // 更新编辑时间
+        picture.setEditTime(new Date());
+        // 补充审核参数
+        pictureService.fillReviewParams(picture, loginUser);
         long id = pictureEditRequest.getId();
         // 判断是否存在
         Picture oldPicture = pictureService.getById(id);
