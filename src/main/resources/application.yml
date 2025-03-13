@@ -63,11 +63,11 @@ mybatis-plus:
 # todo 需替换配置
 cos:
   client:
-    host: https://gallery-1314091676.cos.ap-guangzhou.myqcloud.com
-    accessKey: AKIDCScaKrBIBqPp46uZ5X1cLxMdfU6UefcY
-    secretKey: pbJsMeiZDgwzwfASbZJtW2MSL0SilbDd
-    region: ap-guangzhou
-    bucket: gallery-1314091676
+    host: 
+    accessKey: 
+    secretKey: 
+    region: 
+    bucket: 
 # 接口文档配置
 knife4j:
   enable: true
